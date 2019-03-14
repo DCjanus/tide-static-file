@@ -1,0 +1,11 @@
+[package]
+name = "tide-static-file"
+version = "0.1.0"
+authors = ["DCjanus <DCjanus@dcjanus.com>"]
+edition = "2018"
+
+[dependencies]
+
+[dependencies.tide]
+git = "https://github.com/rustasync/tide.git"
+rev = "7e87e4e0699a3fff4453c8a25d3f8f5fa186fdbb"
