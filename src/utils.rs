@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::TSFResult;
 use http::{header, StatusCode};
 use mime::Mime;
 use range_header::ByteRange;
@@ -11,6 +11,8 @@ use std::{
 use tide::{IntoResponse, Response};
 
 pub(crate) const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 4;
+pub(crate) const BOUNDARY: &str = "DCjanus";
+pub(crate) const MULTI_RANGE_CONTENT_TYPE: &str = "multipart/byteranges; boundary=DCjanus";
 
 pub(crate) enum ErrorResponse {
     NotFound,
@@ -52,7 +54,7 @@ pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
     root.join(p)
 }
 
-pub(crate) fn metadata(path: &Path) -> Result<(File, Mime, u64)> {
+pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64)> {
     let mime = mime_guess::guess_mime_type(&path);
     let file = File::open(path)?;
     let size = file.metadata()?.len();
@@ -103,9 +105,49 @@ pub(crate) fn buffer_size(remain: u64, max_buffer_size: usize) -> usize {
     }
 }
 
+/// given number `x`, return `x.to_string().len()`
+#[inline]
+#[allow(clippy::unreadable_literal)]
+pub(super) fn u64_width(x: u64) -> usize {
+    const NUMBERS: [u64; 19] = [
+        10,
+        100,
+        1000,
+        10000,
+        100000,
+        1000000,
+        10000000,
+        100000000,
+        1000000000,
+        10000000000,
+        100000000000,
+        1000000000000,
+        10000000000000,
+        100000000000000,
+        1000000000000000,
+        10000000000000000,
+        100000000000000000,
+        1000000000000000000,
+        10000000000000000000,
+    ];
+    NUMBERS.iter().position(|limit| *limit > x).unwrap_or(19) + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn test_constraints() {
+        assert!(size_of::<usize>() <= size_of::<u64>());
+        assert!(size_of::<usize>() >= size_of::<u32>());
+        assert_eq!(
+            MULTI_RANGE_CONTENT_TYPE,
+            format!("multipart/byteranges; boundary={}", BOUNDARY)
+        );
+    }
+
     #[test]
     fn test_resolve_path() {
         let base_dir = &PathBuf::from("/virtual");
@@ -134,7 +176,7 @@ mod tests {
         assert_eq!(
             Some(Range {
                 start: 100,
-                end: 101
+                end: 101,
             }),
             actual_range(ByteRange::FromToAll(100, 100), 200)
         );
@@ -144,21 +186,21 @@ mod tests {
         assert_eq!(
             Some(Range {
                 start: 100,
-                end: 200
+                end: 200,
             }),
             actual_range(ByteRange::FromToAll(100, 199), 200)
         );
         assert_eq!(
             Some(Range {
                 start: 100,
-                end: 200
+                end: 200,
             }),
             actual_range(ByteRange::FromTo(100), 200)
         );
         assert_eq!(
             Some(Range {
                 start: 100,
-                end: 200
+                end: 200,
             }),
             actual_range(ByteRange::Last(100), 200)
         );
@@ -166,13 +208,18 @@ mod tests {
 
     #[test]
     fn test_buffer_size() {
-        use std::mem::size_of;
-
-        assert!(size_of::<usize>() <= size_of::<u64>());
         assert_eq!(0, buffer_size(0, MAX_BUFFER_SIZE));
         assert_eq!(
             MAX_BUFFER_SIZE,
             buffer_size(MAX_BUFFER_SIZE as u64 + 1, MAX_BUFFER_SIZE)
         );
+    }
+
+    #[test]
+    fn test_width() {
+        let test_case = [0, 9, 10, 99, 100, u64::max_value()];
+        for &i in test_case.into_iter() {
+            assert_eq!(i.to_string().len(), u64_width(i));
+        }
     }
 }

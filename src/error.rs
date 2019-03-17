@@ -1,7 +1,8 @@
 use failure::Fail;
 use std::path::PathBuf;
 
-pub type Result<T> = std::result::Result<T, failure::Error>;
+/// **T**ide **S**tatic **F**ile Result
+pub type TSFResult<T> = std::result::Result<T, failure::Error>;
 
 #[derive(Debug, Fail)]
 #[fail(display = "no such directory found: {:?}", _0)]

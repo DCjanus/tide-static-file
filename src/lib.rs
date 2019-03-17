@@ -1,32 +1,19 @@
 #![feature(async_await, await_macro, futures_api)]
 
 //! Static file server implementation, work with [Tide](https://github.com/rustasync/tide)
-//!
-//! # Feature
-//!
-//! + Whole file response
-//! + Single range
-//!
-//! # TODO
-//! + Multi Range
-//! + ETAG
-//! + Last-Modified
-//! + Content-Disposition (Non-ASCII support)
-//! + If-Range
-//! + Better performance (async file IO or 'sendfile')
-//! + Index file support(e.g.: index.html)
-//! + File list for directory (default off)
-//! + Merge ranges(if overlap)
-//! + Integration tests
 
 mod error;
+mod multi_range;
 mod single_range;
 mod utils;
 
-pub use crate::error::Result;
+pub use crate::error::TSFResult;
 use crate::{
+    multi_range::{MultiRangeReader, PartHeader},
     single_range::SingleRangeReader,
-    utils::{actual_range, metadata, resolve_path, ErrorResponse},
+    utils::{
+        actual_range, metadata, resolve_path, ErrorResponse, BOUNDARY, MULTI_RANGE_CONTENT_TYPE,
+    },
 };
 use futures::future::FutureObj;
 use http::{
@@ -46,7 +33,7 @@ pub struct StaticFiles {
 }
 
 impl StaticFiles {
-    pub fn new(root: impl AsRef<Path>) -> Result<Self> {
+    pub fn new(root: impl AsRef<Path>) -> TSFResult<Self> {
         let root = root.as_ref().to_path_buf();
         if !root.is_dir() {
             return Err(error::NoSuchDirectory(root).into());
@@ -114,7 +101,7 @@ impl StaticFiles {
         };
 
         if ranges.is_empty() {
-            // no 'Range' header value found
+            // no valid (format) 'Range' header value found
             // for example: 'Range: lines=1-2' or 'Range: nothing'
             return http::Response::builder()
                 .status(http::StatusCode::BAD_REQUEST)
@@ -168,7 +155,29 @@ impl StaticFiles {
                     .body(reader.into_body())
                     .unwrap()
             }
-            _ => unimplemented!(),
+            _ => {
+                // multi valid 'Range' header found
+                let header_length: usize = ranges
+                    .iter()
+                    .map(|x| PartHeader::new(x, mime_text, file_size).size())
+                    .sum();
+                let body_length: u64 = ranges.iter().map(|x| x.end - x.start).sum();
+                let final_length = 8 + BOUNDARY.len(); /*"\r\n--".len() + BOUNDARY.len() + "--\r\n".len()*/
+                let content_length = header_length as u64 + body_length + final_length as u64;
+
+                let reader = MultiRangeReader::new(file, file_size, mime_text, ranges);
+
+                http::Response::builder()
+                    .status(http::StatusCode::PARTIAL_CONTENT)
+                    .header(
+                        header::CONTENT_TYPE,
+                        MULTI_RANGE_CONTENT_TYPE, // XXX macro `format` might be slow
+                    )
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .header(header::CONTENT_LENGTH, content_length)
+                    .body(reader.into_body())
+                    .unwrap()
+            }
         }
     }
 }
