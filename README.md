@@ -7,13 +7,17 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + Whole file response
 + Single range
 + Multi ranges
++ ETAG
++ Last-Modified
 
 # TODO
 
-+ ETAG
-+ Last-Modified
-+ Content-Disposition (Non-ASCII support)
 + If-Range
++ If-Modified-Since
++ If-Unmodified-Since
++ If-Match
++ If-None-Match
++ Content-Disposition (Non-ASCII support)
 + Better performance (async file IO or 'sendfile')
 + Index file support(e.g.: index.html)
 + File list for directory (default off)

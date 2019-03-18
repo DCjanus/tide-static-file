@@ -71,10 +71,20 @@ impl StaticFiles {
             Some(x) => x,
         };
 
-        let (file, mime, file_size) = match metadata(&target_path) {
+        let (file, mime, file_size, last_modify) = match metadata(&target_path) {
             Err(_) => return ErrorResponse::Unexpected.into_response(),
             Ok(x) => x,
         };
+
+        let timestamp = match last_modify.duration_since(std::time::UNIX_EPOCH) {
+            Ok(x) => x.as_secs(),
+            Err(error) => {
+                error!("unexpected error occurred: {:?}", error);
+                return ErrorResponse::Unexpected.into_response();
+            }
+        };
+        let etag = format!("{:x}-{:x}", timestamp, file_size);
+
         let mime_text: &str = &mime.to_string();
 
         let ranges: Vec<ByteRange> = match ranges {
@@ -91,9 +101,11 @@ impl StaticFiles {
                 // whole file response
                 return http::Response::builder()
                     .status(StatusCode::OK)
+                    .header(header::ETAG, etag)
                     .header(header::CONTENT_TYPE, mime_text)
                     .header(header::ACCEPT_RANGES, "bytes")
                     .header(header::CONTENT_LENGTH, file_size)
+                    .header(header::LAST_MODIFIED, httpdate::fmt_http_date(last_modify))
                     .body(reader.into_body())
                     .unwrap();
             }
@@ -148,10 +160,12 @@ impl StaticFiles {
 
                 http::Response::builder()
                     .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::ETAG, etag)
                     .header(header::CONTENT_TYPE, mime_text)
                     .header(header::ACCEPT_RANGES, "bytes")
                     .header(header::CONTENT_RANGE, content_range_value)
                     .header(header::CONTENT_LENGTH, range.end - range.start)
+                    .header(header::LAST_MODIFIED, httpdate::fmt_http_date(last_modify))
                     .body(reader.into_body())
                     .unwrap()
             }
@@ -169,12 +183,11 @@ impl StaticFiles {
 
                 http::Response::builder()
                     .status(http::StatusCode::PARTIAL_CONTENT)
-                    .header(
-                        header::CONTENT_TYPE,
-                        MULTI_RANGE_CONTENT_TYPE, // XXX macro `format` might be slow
-                    )
+                    .header(header::ETAG, etag)
+                    .header(header::CONTENT_TYPE, MULTI_RANGE_CONTENT_TYPE)
                     .header(header::ACCEPT_RANGES, "bytes")
                     .header(header::CONTENT_LENGTH, content_length)
+                    .header(header::LAST_MODIFIED, httpdate::fmt_http_date(last_modify))
                     .body(reader.into_body())
                     .unwrap()
             }

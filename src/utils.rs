@@ -7,6 +7,7 @@ use std::{
     fs::File,
     ops::Range,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 use tide::{IntoResponse, Response};
 
@@ -54,12 +55,14 @@ pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
     root.join(p)
 }
 
-pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64)> {
+pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime)> {
     let mime = mime_guess::guess_mime_type(&path);
     let file = File::open(path)?;
-    let size = file.metadata()?.len();
+    let meta = file.metadata()?;
+    let size = meta.len();
+    let last_modify = meta.modified()?;
 
-    Ok((file, mime, size))
+    Ok((file, mime, size, last_modify))
 }
 
 pub(crate) fn actual_range(byte_range: ByteRange, file_size: u64) -> Option<Range<u64>> {
