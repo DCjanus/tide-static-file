@@ -55,14 +55,22 @@ pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
     root.join(p)
 }
 
-pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime)> {
+pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime, String)> {
     let mime = mime_guess::guess_mime_type(&path);
     let file = File::open(path)?;
     let meta = file.metadata()?;
     let size = meta.len();
     let last_modify = meta.modified()?;
 
-    Ok((file, mime, size, last_modify))
+    let etag = format!(
+        "{:x}-{:x}",
+        last_modify
+            .duration_since(::std::time::UNIX_EPOCH)?
+            .as_secs(),
+        size
+    );
+
+    Ok((file, mime, size, last_modify, etag))
 }
 
 pub(crate) fn actual_range(byte_range: ByteRange, file_size: u64) -> Option<Range<u64>> {
