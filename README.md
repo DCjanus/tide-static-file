@@ -9,10 +9,10 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + Multi ranges
 + ETAG
 + Last-Modified
++ If-Range
 
 # TODO
 
-+ If-Range
 + If-Modified-Since
 + If-Unmodified-Since
 + If-Match

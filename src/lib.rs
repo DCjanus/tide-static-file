@@ -25,6 +25,7 @@ use range_header::ByteRange;
 use std::{
     ops::Range,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 use tide::{configuration::Store, IntoResponse, Request, Response, RouteMatch};
 
@@ -60,12 +61,30 @@ impl<Data> tide::Endpoint<Data, ()> for StaticFiles {
             .and_then(|x: &HeaderValue| x.to_str().ok())
             .map(ByteRange::parse);
 
-        FutureObj::new(Box::new(async move { Self::run(target_path, ranges) }))
+        let if_range = req.headers().get(http::header::IF_RANGE).cloned();
+
+        FutureObj::new(Box::new(
+            async move { Self::run(target_path, ranges, if_range) },
+        ))
     }
 }
 
 impl StaticFiles {
-    fn run(target_path: Option<PathBuf>, ranges: Option<Vec<ByteRange>>) -> Response {
+    fn should_range(if_range: Option<HeaderValue>, etag: &str, last_modify: &SystemTime) -> bool {
+        match if_range.and_then(|x| x.to_str().map(std::string::ToString::to_string).ok()) {
+            None => false,
+            Some(ref x) if x == etag => true,
+            Some(ref x) => httpdate::parse_http_date(x)
+                .map(|x| x == *last_modify)
+                .unwrap_or(false),
+        }
+    }
+
+    fn run(
+        target_path: Option<PathBuf>,
+        ranges: Option<Vec<ByteRange>>,
+        if_range: Option<HeaderValue>,
+    ) -> Response {
         let target_path = match target_path {
             None => return ErrorResponse::NotFound.into_response(),
             Some(x) => x,
@@ -78,6 +97,7 @@ impl StaticFiles {
             }
             Ok(x) => x,
         };
+        let should_range = Self::should_range(if_range, &etag, &last_modify);
         let mime_text: &str = &mime.to_string();
 
         let mut common_response = http::Response::builder();
@@ -86,28 +106,25 @@ impl StaticFiles {
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::LAST_MODIFIED, httpdate::fmt_http_date(last_modify));
 
-        let ranges: Vec<ByteRange> = match ranges {
-            None => {
-                // no 'Range' header found
-                let reader = match SingleRangeReader::new(file, 0, file_size) {
-                    Ok(x) => x,
-                    Err(error) => {
-                        error!("unexpected error occurred: {:?}", error);
-                        return ErrorResponse::Unexpected.into_response();
-                    }
-                };
+        if ranges.is_none() || !should_range {
+            let reader = match SingleRangeReader::new(file, 0, file_size) {
+                Ok(x) => x,
+                Err(error) => {
+                    error!("unexpected error occurred: {:?}", error);
+                    return ErrorResponse::Unexpected.into_response();
+                }
+            };
 
-                // whole file response
-                return common_response
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, mime_text)
-                    .header(header::CONTENT_LENGTH, file_size)
-                    .body(reader.into_body())
-                    .unwrap();
-            }
-            Some(x) => x,
-        };
+            // whole file response
+            return common_response
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime_text)
+                .header(header::CONTENT_LENGTH, file_size)
+                .body(reader.into_body())
+                .unwrap();
+        }
 
+        let ranges: Vec<ByteRange> = ranges.unwrap();
         if ranges.is_empty() {
             // no valid (format) 'Range' header value found
             // for example: 'Range: lines=1-2' or 'Range: nothing'
