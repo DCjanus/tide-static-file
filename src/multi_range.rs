@@ -53,7 +53,7 @@ impl Stream for MultiRangeReader {
         fn make_buffer(buffer: Cursor<Vec<u8>>) -> Result<Bytes, std::io::Error> {
             let position = buffer.position();
             if position == 0 {
-                error!("unexpected error occurred");
+                error!("unexpected error occurred: stream item length is 0");
                 return Err(std::io::ErrorKind::Other.into());
             }
 

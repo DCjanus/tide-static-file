@@ -23,3 +23,15 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + File list for directory (default off)
 + Merge ranges(if overlap)
 + Integration tests
++ Auto check with CI
++ Better error message
++ More config
+
+# Thanks
+
+Learned so much excellent code from: 
+
++ [actix-web](https://github.com/actix/actix-web) ([LICENSE FILE](./origin-license/ACTIX-WEB-LICENSE-MIT))
++ [tomhoule/tide-static-files](https://github.com/tomhoule/tide-static-files)
+
+Thanks for everyone!

@@ -12,7 +12,7 @@ use std::{
 use tide::{IntoResponse, Response};
 
 pub(crate) const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 4;
-pub(crate) const BOUNDARY: &str = "DCjanus";
+pub(crate) const BOUNDARY: &str = "DCjanus"; // :-P
 pub(crate) const MULTI_RANGE_CONTENT_TYPE: &str = "multipart/byteranges; boundary=DCjanus";
 
 pub(crate) enum ErrorResponse {
@@ -37,6 +37,8 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+/// Given root path and url_path, return absolute path
+/// The main purpose of this function is to prevent [directory traversal attack](https://en.wikipedia.org/wiki/Directory_traversal_attack)
 pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
     let mut p = PathBuf::new();
     for i in url_path.split(|c| c == '/' || c == '\\') {
@@ -55,6 +57,7 @@ pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
     root.join(p)
 }
 
+/// Given file path, return file and some information about this file
 pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime, String)> {
     let mime = mime_guess::guess_mime_type(&path);
     let file = File::open(path)?;
@@ -108,6 +111,8 @@ pub(crate) fn actual_range(byte_range: ByteRange, file_size: u64) -> Option<Rang
     }
 }
 
+/// A generic utility function that determines the pre-allocated memory size
+/// In simple terms, return value is `min(remain, max_buffer_size)`
 pub(crate) fn buffer_size(remain: u64, max_buffer_size: usize) -> usize {
     if remain > usize::max_value() as u64 {
         max_buffer_size
