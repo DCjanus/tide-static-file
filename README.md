@@ -10,13 +10,13 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + ETAG
 + Last-Modified
 + If-Range
++ If-Modified-Since
++ If-None-Match
 
 # TODO
 
-+ If-Modified-Since
 + If-Unmodified-Since
 + If-Match
-+ If-None-Match
 + Content-Disposition (Non-ASCII support)
 + Better performance (async file IO or 'sendfile')
 + Index file support(e.g.: index.html)
@@ -26,6 +26,7 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + Auto check with CI
 + Better error message
 + More config
++ Code coverage report with ci
 
 # Thanks
 

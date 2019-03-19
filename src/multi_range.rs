@@ -86,6 +86,7 @@ impl Stream for MultiRangeReader {
                     let slice = &mut buffer.get_mut()[slice_start..slice_end];
 
                     if let Err(error) = self.file.seek(SeekFrom::Start(first_range.start)) {
+                        error!("failed to seek: {:?}", error);
                         return Poll::Ready(Some(Err(error)));
                     }
                     let chunk_size = match self.file.read(slice) {
@@ -116,7 +117,7 @@ impl Stream for MultiRangeReader {
                         use std::io::Write;
                         let write_result = write!(buffer, "\r\n--{}--\r\n", BOUNDARY);
                         if let Err(error) = write_result {
-                            error!("unexpected error occurred: {}", error);
+                            error!("failed to write final line: {}", error);
                             return Poll::Ready(Some(Err(error)));
                         }
                         self.state = ToBeWritten::None;

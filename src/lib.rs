@@ -12,7 +12,8 @@ use crate::{
     multi_range::{MultiRangeReader, PartHeader},
     single_range::SingleRangeReader,
     utils::{
-        actual_range, metadata, resolve_path, ErrorResponse, BOUNDARY, MULTI_RANGE_CONTENT_TYPE,
+        actual_range, get_header, metadata, resolve_path, should_cache, should_range,
+        ErrorResponse, BOUNDARY, MULTI_RANGE_CONTENT_TYPE,
     },
 };
 use futures::future::FutureObj;
@@ -20,12 +21,13 @@ use http::{
     header::{self, HeaderValue},
     StatusCode,
 };
+use http_service::Body;
 use log::error;
 use range_header::ByteRange;
 use std::{
+    fs::File,
     ops::Range,
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 use tide::{configuration::Store, IntoResponse, Request, Response, RouteMatch};
 
@@ -55,73 +57,88 @@ impl<Data> tide::Endpoint<Data, ()> for StaticFiles {
             .and_then(|rm| rm.vec.first().map(|x| resolve_path(&self.root, x)))
             .and_then(|x| x.canonicalize().ok());
 
-        let ranges = req
-            .headers()
-            .get(http::header::RANGE)
-            .and_then(|x: &HeaderValue| x.to_str().ok())
-            .map(ByteRange::parse);
-
-        let if_range = req.headers().get(http::header::IF_RANGE).cloned();
-
-        FutureObj::new(Box::new(
-            async move { Self::run(target_path, ranges, if_range) },
-        ))
+        FutureObj::new(Box::new(async move { Self::run(target_path, req) }))
     }
 }
 
 impl StaticFiles {
-    fn should_range(if_range: Option<HeaderValue>, etag: &str, last_modify: &SystemTime) -> bool {
-        match if_range.and_then(|x| x.to_str().map(std::string::ToString::to_string).ok()) {
-            None => false,
-            Some(ref x) if x == etag => true,
-            Some(ref x) => httpdate::parse_http_date(x)
-                .map(|x| x == *last_modify)
-                .unwrap_or(false),
-        }
+    fn whole_file_response(
+        mut common_response: http::response::Builder,
+        file: File,
+        file_size: u64,
+        mime_text: &str,
+    ) -> Response {
+        let reader = match SingleRangeReader::new(file, 0, file_size) {
+            Ok(x) => x,
+            Err(error) => {
+                error!("unexpected error occurred: {:?}", error);
+                return ErrorResponse::Unexpected.into_response();
+            }
+        };
+
+        common_response
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime_text)
+            .header(header::CONTENT_LENGTH, file_size)
+            .body(reader.into_body())
+            .unwrap()
     }
 
-    fn run(
-        target_path: Option<PathBuf>,
-        ranges: Option<Vec<ByteRange>>,
-        if_range: Option<HeaderValue>,
-    ) -> Response {
+    fn run(target_path: Option<PathBuf>, req: Request) -> Response {
+        // TODO this function is too long
+
         let target_path = match target_path {
             None => return ErrorResponse::NotFound.into_response(),
             Some(x) => x,
         };
-
-        let (file, mime, file_size, last_modify, etag) = match metadata(&target_path) {
+        let (file, mime, file_size, last_modified, etag) = match metadata(&target_path) {
             Err(error) => {
                 error!("unexpected error occurred: {:?}", error);
                 return ErrorResponse::Unexpected.into_response();
             }
             Ok(x) => x,
         };
-        let should_range = Self::should_range(if_range, &etag, &last_modify);
         let mime_text: &str = &mime.to_string();
 
         let mut common_response = http::Response::builder();
         common_response
-            .header(header::ETAG, etag)
+            .header(header::ETAG, etag.clone())
             .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::LAST_MODIFIED, httpdate::fmt_http_date(last_modify));
+            .header(
+                header::LAST_MODIFIED,
+                httpdate::fmt_http_date(last_modified),
+            );
+;
 
-        if ranges.is_none() || !should_range {
-            let reader = match SingleRangeReader::new(file, 0, file_size) {
-                Ok(x) => x,
-                Err(error) => {
-                    error!("unexpected error occurred: {:?}", error);
-                    return ErrorResponse::Unexpected.into_response();
-                }
-            };
-
-            // whole file response
+        let should_cache = should_cache(
+            get_header(&req, http::header::IF_MODIFIED_SINCE),
+            get_header(&req, http::header::IF_NONE_MATCH),
+            &last_modified,
+            &etag,
+        );
+        if should_cache {
             return common_response
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime_text)
-                .header(header::CONTENT_LENGTH, file_size)
-                .body(reader.into_body())
+                .status(StatusCode::NOT_MODIFIED)
+                .body(Body::empty())
                 .unwrap();
+        }
+
+        let should_range = should_range(
+            get_header(&req, http::header::IF_RANGE),
+            &etag,
+            &last_modified,
+        );
+        if !should_range {
+            return Self::whole_file_response(common_response, file, file_size, mime_text);
+        }
+
+        let ranges: Option<Vec<ByteRange>> = req
+            .headers()
+            .get(http::header::RANGE)
+            .and_then(|x: &HeaderValue| x.to_str().ok())
+            .map(ByteRange::parse);
+        if ranges.is_none() {
+            return Self::whole_file_response(common_response, file, file_size, mime_text);
         }
 
         let ranges: Vec<ByteRange> = ranges.unwrap();
@@ -140,7 +157,6 @@ impl StaticFiles {
             .into_iter()
             .flat_map(|x| actual_range(x, file_size))
             .collect();
-
         match ranges.len() {
             0 => {
                 // no valid 'Range' header valid found

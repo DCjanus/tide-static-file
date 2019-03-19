@@ -1,5 +1,8 @@
 use crate::error::TSFResult;
-use http::{header, StatusCode};
+use http::{
+    header::{self, AsHeaderName},
+    StatusCode,
+};
 use mime::Mime;
 use range_header::ByteRange;
 use std::{
@@ -35,6 +38,12 @@ impl IntoResponse for ErrorResponse {
                 .unwrap(),
         }
     }
+}
+
+pub(crate) fn get_header(req: &tide::Request, name: impl AsHeaderName) -> Option<String> {
+    req.headers()
+        .get(name)
+        .and_then(|x| x.to_str().ok().map(std::string::ToString::to_string))
 }
 
 /// Given root path and url_path, return absolute path
@@ -76,6 +85,14 @@ pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime, S
     Ok((file, mime, size, last_modify, etag))
 }
 
+/// Convert range in header to range in file
+///
+/// # Example
+///
+/// + file size is 20, header is `Range: bytes=1-1`, return `Some(Range { start: 1, end: 2} )`
+/// + file size is 20, header is `Range: bytes=1-100`, return `Some(Range { start: 1, end: 20} )`
+/// + file size is 20, header is `Range: bytes=20-20`, return `None`
+/// + file size is 20, header is `Range: bytes=19-1`, return `None`
 pub(crate) fn actual_range(byte_range: ByteRange, file_size: u64) -> Option<Range<u64>> {
     match byte_range {
         ByteRange::FromTo(start) => {
@@ -108,6 +125,34 @@ pub(crate) fn actual_range(byte_range: ByteRange, file_size: u64) -> Option<Rang
                 None
             }
         }
+    }
+}
+
+pub(crate) fn should_range(if_range: Option<String>, etag: &str, last_modify: &SystemTime) -> bool {
+    // TODO unit test
+    match if_range {
+        None => false,
+        Some(ref x) if x == etag => true,
+        Some(ref x) => httpdate::parse_http_date(x)
+            .map(|x| x == *last_modify)
+            .unwrap_or(false),
+    }
+}
+
+pub(crate) fn should_cache(
+    if_modified_since: Option<String>,
+    if_none_match: Option<String>,
+    last_modified: &SystemTime,
+    etag: &str,
+) -> bool {
+    // TODO unit test
+    if let Some(etags) = if_none_match {
+        etags.split(',').map(str::trim).any(|x| x == etag)
+    } else {
+        if_modified_since
+            .and_then(|x| httpdate::parse_http_date(&x).ok())
+            .map(|x| x >= *last_modified)
+            .unwrap_or(false)
     }
 }
 
