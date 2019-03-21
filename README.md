@@ -12,11 +12,11 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + If-Range
 + If-Modified-Since
 + If-None-Match
++ If-Unmodified-Since
++ If-Match
 
 # TODO
 
-+ If-Unmodified-Since
-+ If-Match
 + Content-Disposition (Non-ASCII support)
 + Better performance (async file IO or 'sendfile')
 + Index file support(e.g.: index.html)

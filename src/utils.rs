@@ -128,34 +128,6 @@ pub(crate) fn actual_range(byte_range: ByteRange, file_size: u64) -> Option<Rang
     }
 }
 
-pub(crate) fn should_range(if_range: Option<String>, etag: &str, last_modify: &SystemTime) -> bool {
-    // TODO unit test
-    match if_range {
-        None => false,
-        Some(ref x) if x == etag => true,
-        Some(ref x) => httpdate::parse_http_date(x)
-            .map(|x| x == *last_modify)
-            .unwrap_or(false),
-    }
-}
-
-pub(crate) fn should_cache(
-    if_modified_since: Option<String>,
-    if_none_match: Option<String>,
-    last_modified: &SystemTime,
-    etag: &str,
-) -> bool {
-    // TODO unit test
-    if let Some(etags) = if_none_match {
-        etags.split(',').map(str::trim).any(|x| x == etag)
-    } else {
-        if_modified_since
-            .and_then(|x| httpdate::parse_http_date(&x).ok())
-            .map(|x| x >= *last_modified)
-            .unwrap_or(false)
-    }
-}
-
 /// A generic utility function that determines the pre-allocated memory size
 /// In simple terms, return value is `min(remain, max_buffer_size)`
 pub(crate) fn buffer_size(remain: u64, max_buffer_size: usize) -> usize {

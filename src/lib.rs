@@ -12,8 +12,8 @@ use crate::{
     multi_range::{MultiRangeReader, PartHeader},
     single_range::SingleRangeReader,
     utils::{
-        actual_range, get_header, metadata, resolve_path, should_cache, should_range,
-        ErrorResponse, BOUNDARY, MULTI_RANGE_CONTENT_TYPE,
+        actual_range, get_header, metadata, resolve_path, ErrorResponse, BOUNDARY,
+        MULTI_RANGE_CONTENT_TYPE,
     },
 };
 use futures::future::FutureObj;
@@ -22,12 +22,14 @@ use http::{
     StatusCode,
 };
 use http_service::Body;
+use httpdate::HttpDate;
 use log::error;
 use range_header::ByteRange;
 use std::{
     fs::File,
     ops::Range,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 use tide::{configuration::Store, IntoResponse, Request, Response, RouteMatch};
 
@@ -62,28 +64,6 @@ impl<Data> tide::Endpoint<Data, ()> for StaticFiles {
 }
 
 impl StaticFiles {
-    fn whole_file_response(
-        mut common_response: http::response::Builder,
-        file: File,
-        file_size: u64,
-        mime_text: &str,
-    ) -> Response {
-        let reader = match SingleRangeReader::new(file, 0, file_size) {
-            Ok(x) => x,
-            Err(error) => {
-                error!("unexpected error occurred: {:?}", error);
-                return ErrorResponse::Unexpected.into_response();
-            }
-        };
-
-        common_response
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime_text)
-            .header(header::CONTENT_LENGTH, file_size)
-            .body(reader.into_body())
-            .unwrap()
-    }
-
     fn run(target_path: Option<PathBuf>, req: Request) -> Response {
         // TODO this function is too long
 
@@ -108,12 +88,11 @@ impl StaticFiles {
                 header::LAST_MODIFIED,
                 httpdate::fmt_http_date(last_modified),
             );
-;
 
-        let should_cache = should_cache(
+        let should_cache = Self::should_cache(
             get_header(&req, http::header::IF_MODIFIED_SINCE),
             get_header(&req, http::header::IF_NONE_MATCH),
-            &last_modified,
+            last_modified,
             &etag,
         );
         if should_cache {
@@ -123,10 +102,10 @@ impl StaticFiles {
                 .unwrap();
         }
 
-        let should_range = should_range(
+        let should_range = Self::should_range(
             get_header(&req, http::header::IF_RANGE),
             &etag,
-            &last_modified,
+            last_modified,
         );
         if !should_range {
             return Self::whole_file_response(common_response, file, file_size, mime_text);
@@ -150,6 +129,27 @@ impl StaticFiles {
                 .header(header::CONTENT_TYPE, mime::TEXT_PLAIN.to_string())
                 .header(header::ACCEPT_RANGES, "bytes")
                 .body("failed to parse request header: Range".into())
+                .unwrap();
+        }
+
+        // "redirects and failures take precedence over the evaluation of
+        // preconditions in conditional requests."
+        // ref: https://tools.ietf.org/html/rfc7232#section-5
+        //
+        // It's too hard to check all things
+        // So we put precondition check here
+        let should_precondition_failed = Self::precondition_failed(
+            get_header(&req, http::header::IF_MATCH),
+            get_header(&req, http::header::IF_UNMODIFIED_SINCE),
+            last_modified,
+            &etag,
+        );
+        if should_precondition_failed {
+            return http::Response::builder()
+                .status(http::StatusCode::PRECONDITION_FAILED)
+                .header(header::CONTENT_TYPE, mime::TEXT_PLAIN.to_string())
+                .header(header::ACCEPT_RANGES, "bytes")
+                .body("precondition failed".into())
                 .unwrap();
         }
 
@@ -215,5 +215,299 @@ impl StaticFiles {
                     .unwrap()
             }
         }
+    }
+}
+
+impl StaticFiles {
+    /// ref: https://tools.ietf.org/html/rfc7233#section-3.2
+    pub(crate) fn should_range(
+        if_range: Option<String>,
+        etag: &str,
+        last_modify: SystemTime,
+    ) -> bool {
+        if let Some(x) = if_range
+            .as_ref()
+            .and_then(|x| x.parse::<HttpDate>().ok())
+            .map(|x| x == HttpDate::from(last_modify))
+        {
+            return x;
+        }
+
+        if let Some(x) = if_range.map(|x| x.split(',').map(str::trim).any(|x| x == etag)) {
+            return x;
+        }
+
+        false
+    }
+
+    /// HTTP 304 (Not Modified) or not
+    ///
+    /// ref:
+    /// + https://tools.ietf.org/html/rfc7232#section-3.2
+    /// + https://tools.ietf.org/html/rfc7232#section-3.3
+    pub(crate) fn should_cache(
+        if_modified_since: Option<String>,
+        if_none_match: Option<String>,
+        last_modified: SystemTime,
+        etag: &str,
+    ) -> bool {
+        if let Some(etags) = if_none_match {
+            etags.split(',').map(str::trim).any(|x| x == etag)
+        } else {
+            if_modified_since
+                .and_then(|x| x.parse::<HttpDate>().ok())
+                .map(|x| x == HttpDate::from(last_modified))
+                .unwrap_or(false)
+        }
+    }
+
+    /// HTTP 412 (Precondition Failed) or not
+    ///
+    /// ref: https://tools.ietf.org/html/rfc7232#section-4.2
+    pub(crate) fn precondition_failed(
+        if_match: Option<String>,
+        if_unmodified_since: Option<String>,
+        last_modified: SystemTime,
+        etag: &str,
+    ) -> bool {
+        if let Some(expect) = if_match {
+            expect.split(',').map(str::trim).all(|x| x != etag)
+        } else {
+            if_unmodified_since
+                .and_then(|x| x.parse::<HttpDate>().ok())
+                .map(|x| x != HttpDate::from(last_modified))
+                .unwrap_or(false)
+        }
+    }
+
+    fn whole_file_response(
+        mut common_response: http::response::Builder,
+        file: File,
+        file_size: u64,
+        mime_text: &str,
+    ) -> Response {
+        let reader = match SingleRangeReader::new(file, 0, file_size) {
+            Ok(x) => x,
+            Err(error) => {
+                error!("unexpected error occurred: {:?}", error);
+                return ErrorResponse::Unexpected.into_response();
+            }
+        };
+
+        common_response
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime_text)
+            .header(header::CONTENT_LENGTH, file_size)
+            .body(reader.into_body())
+            .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StaticFiles;
+    use std::{
+        ops::Add,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn test_should_cache() {
+        let before = &UNIX_EPOCH;
+        let before_text = &httpdate::fmt_http_date(before.clone());
+
+        let little_diff = before.add(Duration::from_millis(1));
+        let little_text = &httpdate::fmt_http_date(little_diff.clone());
+
+        let after = &before.add(Duration::from_secs(10));
+        let after_text = &httpdate::fmt_http_date(after.clone());
+
+        assert_eq!(
+            true,
+            StaticFiles::should_cache(
+                Some(before_text.to_owned()),
+                None,
+                before.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            true,
+            StaticFiles::should_cache(
+                Some(little_text.to_owned()),
+                None,
+                before.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_cache(Some(after_text.to_owned()), None, before.clone(), "correct")
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_cache(Some(before_text.to_owned()), None, after.clone(), "correct")
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_cache(
+                Some(after_text.to_owned()),
+                Some("wrong".to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            true,
+            StaticFiles::should_cache(
+                Some(after_text.to_owned()),
+                Some("wrong, correct ".to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_cache(None, Some("wrong".to_owned()), after.clone(), "correct")
+        );
+        assert_eq!(
+            true,
+            StaticFiles::should_cache(
+                Some(little_text.to_owned()),
+                Some("correct".to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+    }
+
+    #[test]
+    fn test_precondition_failed() {
+        let before = &UNIX_EPOCH;
+        let before_text = &httpdate::fmt_http_date(before.clone());
+
+        let little_diff = before.add(Duration::from_millis(1));
+        let little_text = &httpdate::fmt_http_date(little_diff.clone());
+
+        let after = &before.add(Duration::from_secs(10));
+        let after_text = &httpdate::fmt_http_date(after.clone());
+
+        assert_eq!(
+            false,
+            StaticFiles::precondition_failed(
+                None,
+                Some(before_text.to_owned()),
+                before.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            false,
+            StaticFiles::precondition_failed(
+                None,
+                Some(little_text.to_owned()),
+                before.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            false,
+            StaticFiles::precondition_failed(
+                None,
+                Some(before_text.to_owned()),
+                little_diff.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            true,
+            StaticFiles::precondition_failed(
+                None,
+                Some(after_text.to_owned()),
+                before.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            true,
+            StaticFiles::precondition_failed(
+                None,
+                Some(before_text.to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            false,
+            StaticFiles::precondition_failed(
+                Some("correct".to_owned()),
+                Some(before_text.to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            false,
+            StaticFiles::precondition_failed(
+                Some("correct, wrong".to_owned()),
+                Some(before_text.to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+        assert_eq!(
+            true,
+            StaticFiles::precondition_failed(
+                Some("wrong".to_owned()),
+                Some(before_text.to_owned()),
+                after.clone(),
+                "correct",
+            )
+        );
+    }
+
+    #[test]
+    fn test_should_range() {
+        let before = &UNIX_EPOCH;
+        let before_text = &httpdate::fmt_http_date(before.clone());
+
+        let little_diff = before.add(Duration::from_millis(1));
+        let little_text = &httpdate::fmt_http_date(little_diff.clone());
+
+        let after = &before.add(Duration::from_secs(10));
+        let after_text = &httpdate::fmt_http_date(after.clone());
+
+        assert_eq!(
+            true,
+            StaticFiles::should_range(Some(before_text.to_owned()), "correct", before.clone())
+        );
+        assert_eq!(
+            true,
+            StaticFiles::should_range(Some(little_text.to_owned()), "correct", before.clone())
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_range(Some(before_text.to_owned()), "correct", after.clone())
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_range(Some(after_text.to_owned()), "correct", before.clone())
+        );
+        assert_eq!(
+            true,
+            StaticFiles::should_range(Some("correct".to_owned()), "correct", before.clone()),
+        );
+        assert_eq!(
+            false,
+            StaticFiles::should_range(Some("wrong".to_owned()), "correct", before.clone()),
+        );
+        assert_eq!(
+            true,
+            StaticFiles::should_range(
+                Some("wrong, correct ".to_owned()),
+                "correct",
+                before.clone(),
+            ),
+        );
     }
 }
