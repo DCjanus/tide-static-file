@@ -58,7 +58,6 @@ impl<Data> tide::Endpoint<Data, ()> for StaticFiles {
         let target_path = params
             .and_then(|rm| rm.vec.first().map(|x| resolve_path(&self.root, x)))
             .and_then(|x| x.canonicalize().ok());
-
         FutureObj::new(Box::new(async move { Self::run(target_path, req) }))
     }
 }
@@ -71,13 +70,14 @@ impl StaticFiles {
             None => return ErrorResponse::NotFound.into_response(),
             Some(x) => x,
         };
-        let (file, mime, file_size, last_modified, etag) = match metadata(&target_path) {
-            Err(error) => {
-                error!("unexpected error occurred: {:?}", error);
-                return ErrorResponse::Unexpected.into_response();
-            }
-            Ok(x) => x,
-        };
+        let (file, mime, file_size, last_modified, etag, content_disposition) =
+            match metadata(&target_path) {
+                Err(error) => {
+                    error!("unexpected error occurred: {:?}", error);
+                    return ErrorResponse::Unexpected.into_response();
+                }
+                Ok(x) => x,
+            };
         let mime_text: &str = &mime.to_string();
 
         let mut common_response = http::Response::builder();
@@ -87,7 +87,8 @@ impl StaticFiles {
             .header(
                 header::LAST_MODIFIED,
                 httpdate::fmt_http_date(last_modified),
-            );
+            )
+            .header(header::CONTENT_DISPOSITION, content_disposition.to_string());
 
         let should_cache = Self::should_cache(
             get_header(&req, http::header::IF_MODIFIED_SINCE),
@@ -237,7 +238,7 @@ impl StaticFiles {
             return x;
         }
 
-        false
+        true
     }
 
     /// HTTP 304 (Not Modified) or not
@@ -286,6 +287,15 @@ impl StaticFiles {
         file_size: u64,
         mime_text: &str,
     ) -> Response {
+        if file_size == 0 {
+            return common_response
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime_text)
+                .header(header::CONTENT_LENGTH, file_size)
+                .body(Body::empty())
+                .unwrap();
+        }
+
         let reader = match SingleRangeReader::new(file, 0, file_size) {
             Ok(x) => x,
             Err(error) => {
@@ -308,7 +318,7 @@ mod tests {
     use super::StaticFiles;
     use std::{
         ops::Add,
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        time::{Duration, UNIX_EPOCH},
     };
 
     #[test]
@@ -509,5 +519,9 @@ mod tests {
                 before.clone(),
             ),
         );
+        assert_eq!(
+            true,
+            StaticFiles::should_range(None, "correct", before.clone())
+        )
     }
 }

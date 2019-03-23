@@ -4,9 +4,11 @@ use http::{
     StatusCode,
 };
 use mime::Mime;
+use percent_encoding::{percent_decode, utf8_percent_encode};
 use range_header::ByteRange;
 use std::{
     cmp::min,
+    fmt::Display,
     fs::File,
     ops::Range,
     path::{Path, PathBuf},
@@ -51,15 +53,17 @@ pub(crate) fn get_header(req: &tide::Request, name: impl AsHeaderName) -> Option
 pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
     let mut p = PathBuf::new();
     for i in url_path.split(|c| c == '/' || c == '\\') {
-        match i {
-            "." => {
-                continue;
-            }
-            ".." => {
-                p.pop();
-            }
-            x => {
-                p.push(x);
+        if let Ok(i) = percent_decode(i.as_bytes()).decode_utf8() {
+            match i.as_ref() {
+                "." => {
+                    continue;
+                }
+                ".." => {
+                    p.pop();
+                }
+                x => {
+                    p.push(x);
+                }
             }
         }
     }
@@ -67,7 +71,9 @@ pub(crate) fn resolve_path(root: &Path, url_path: &str) -> PathBuf {
 }
 
 /// Given file path, return file and some information about this file
-pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime, String)> {
+pub(crate) fn metadata(
+    path: &Path,
+) -> TSFResult<(File, Mime, u64, SystemTime, String, ContentDisposition)> {
     let mime = mime_guess::guess_mime_type(&path);
     let file = File::open(path)?;
     let meta = file.metadata()?;
@@ -82,7 +88,51 @@ pub(crate) fn metadata(path: &Path) -> TSFResult<(File, Mime, u64, SystemTime, S
         size
     );
 
-    Ok((file, mime, size, last_modify, etag))
+    let disposition = ContentDisposition {
+        ty: match mime.type_() {
+            mime::IMAGE | mime::TEXT | mime::VIDEO => DispositionType::Inline,
+            _ => DispositionType::Attachment,
+        },
+        filename: path
+            .file_name()
+            .and_then(|x| x.to_os_string().into_string().ok()),
+    };
+
+    Ok((file, mime, size, last_modify, etag, disposition))
+}
+
+pub enum DispositionType {
+    Inline,
+    Attachment,
+}
+
+impl Display for DispositionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            DispositionType::Inline => write!(f, "inline"),
+            DispositionType::Attachment => write!(f, "attachment"),
+        }
+    }
+}
+
+// TODO unit test
+pub(crate) struct ContentDisposition {
+    ty: DispositionType,
+    filename: Option<String>,
+}
+
+impl Display for ContentDisposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match &self.filename {
+            None => write!(f, "{}", self.ty),
+            Some(filename) => write!(
+                f,
+                "{}; filename*=\"{}\"",
+                self.ty,
+                utf8_percent_encode(filename, percent_encoding::DEFAULT_ENCODE_SET)
+            ),
+        }
+    }
 }
 
 /// Convert range in header to range in file
