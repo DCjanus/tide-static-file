@@ -7,7 +7,7 @@ use mime::Mime;
 use percent_encoding::{percent_decode, utf8_percent_encode};
 use range_header::ByteRange;
 use std::{
-    cmp::min,
+    cmp::{max, min},
     fmt::Display,
     fs::File,
     ops::Range,
@@ -216,10 +216,48 @@ pub(super) fn u64_width(x: u64) -> usize {
     NUMBERS.iter().position(|limit| *limit > x).unwrap_or(19) + 1
 }
 
+pub(crate) fn merge_ranges(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
+    // XXX less memory allocation?
+    ranges.sort_by_cached_key(|x| x.start);
+    let mut result: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+
+    for i in ranges {
+        match result.last_mut() {
+            Some(ref x) if x.end < i.start => result.push(i),
+            Some(x) => x.end = max(x.end, i.end),
+            None => result.push(i),
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::mem::size_of;
+
+    #[test]
+    fn test_merge_range() {
+        fn test_worker(expect: Vec<(u64, u64)>, test_cases: Vec<(u64, u64)>) {
+            let expect = expect
+                .into_iter()
+                .map(|(start, end)| Range { start, end })
+                .collect::<Vec<_>>();
+            let test_cases = test_cases
+                .into_iter()
+                .map(|(start, end)| Range { start, end })
+                .collect::<Vec<_>>();
+            assert_eq!(expect, merge_ranges(test_cases));
+        }
+
+        test_worker(vec![], vec![]);
+        test_worker(vec![(1, 4)], vec![(1, 3), (2, 4)]);
+        test_worker(vec![(1, 4)], vec![(2, 4), (1, 3)]);
+        test_worker(vec![(1, 4)], vec![(2, 3), (1, 4)]);
+        test_worker(vec![(1, 4)], vec![(2, 3), (1, 4), (1, 1)]);
+        test_worker(vec![(0, 3)], vec![(2, 3), (0, 3), (1, 1)]);
+    }
 
     #[test]
     fn test_constraints() {

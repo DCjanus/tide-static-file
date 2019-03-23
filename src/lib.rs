@@ -12,7 +12,7 @@ use crate::{
     multi_range::{MultiRangeReader, PartHeader},
     single_range::SingleRangeReader,
     utils::{
-        actual_range, get_header, metadata, resolve_path, ErrorResponse, BOUNDARY,
+        actual_range, get_header, merge_ranges, metadata, resolve_path, ErrorResponse, BOUNDARY,
         MULTI_RANGE_CONTENT_TYPE,
     },
 };
@@ -154,10 +154,11 @@ impl StaticFiles {
                 .unwrap();
         }
 
-        let mut ranges: Vec<Range<u64>> = ranges
+        let ranges: Vec<Range<u64>> = ranges
             .into_iter()
             .flat_map(|x| actual_range(x, file_size))
             .collect();
+        let mut ranges = merge_ranges(ranges);
         match ranges.len() {
             0 => {
                 // no valid 'Range' header valid found
@@ -173,6 +174,11 @@ impl StaticFiles {
             1 => {
                 // only one valid 'Range' header found
                 let range = ranges.pop().unwrap();
+
+                if range.end == file_size && range.start == 0 {
+                    return Self::whole_file_response(common_response, file, file_size, mime_text);
+                }
+
                 let content_range_value = format!(
                     "bytes {start}-{end}/{total}",
                     start = range.start,

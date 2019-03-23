@@ -15,23 +15,19 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + If-Unmodified-Since
 + If-Match
 + Content-Disposition (Non-ASCII support)
++ Merge ranges(if overlap)
 
 # TODO
 
 + Better performance (async file IO or 'sendfile')
 + Index file support(e.g., index.html)
 + File list for directory (default off)
-+ Merge ranges(if overlap)
 + Integration tests
 + Auto check with CI
 + Better error message
 + More config
 + Code coverage report with ci
 + Percent encoding( e.g., Chinese filename)
-
-# Known issue
-
-+ if file's length is 0 and request header with `Range: bytes=-1`, `attempt to subtract with overflow`
 
 # Thanks
 
