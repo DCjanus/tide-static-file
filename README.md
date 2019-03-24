@@ -16,6 +16,7 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + If-Match
 + Content-Disposition (Non-ASCII support)
 + Merge ranges(if overlap)
++ Percent encoding( e.g., Chinese filename)
 
 # TODO
 
@@ -27,7 +28,6 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 + Better error message
 + More config
 + Code coverage report with ci
-+ Percent encoding( e.g., Chinese filename)
 
 # Thanks
 
