@@ -3,6 +3,7 @@
 //! Static file server implementation, work with [Tide](https://github.com/rustasync/tide)
 
 mod error;
+mod file_read;
 mod multi_range;
 mod single_range;
 mod utils;
