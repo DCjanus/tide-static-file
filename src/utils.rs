@@ -221,7 +221,7 @@ pub(crate) fn merge_ranges(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
     ranges.sort_by_cached_key(|x| x.start);
     let mut result: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
 
-    for i in ranges {
+    for i in ranges.into_iter().filter(|x| x.start != x.end) {
         match result.last_mut() {
             Some(ref x) if x.end < i.start => result.push(i),
             Some(x) => x.end = max(x.end, i.end),
@@ -251,6 +251,7 @@ mod tests {
             assert_eq!(expect, merge_ranges(test_cases));
         }
 
+        test_worker(vec![(1, 2), (4, 5)], vec![(1, 2), (3, 3), (4, 5)]);
         test_worker(vec![], vec![]);
         test_worker(vec![(1, 4)], vec![(1, 3), (2, 4)]);
         test_worker(vec![(1, 4)], vec![(2, 4), (1, 3)]);
