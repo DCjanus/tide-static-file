@@ -17,7 +17,7 @@ use crate::{
         MULTI_RANGE_CONTENT_TYPE,
     },
 };
-use futures::future::FutureObj;
+use futures::{future::FutureObj, io::ErrorKind};
 use http::{
     header::{self, HeaderValue},
     StatusCode,
@@ -190,7 +190,11 @@ impl StaticFiles {
                 let reader = match SingleRangeReader::new(file, range.start, range.end) {
                     Ok(x) => x,
                     Err(error) => {
-                        error!("unexpected error occurred: {:?}", error);
+                        if error.kind() == ErrorKind::WouldBlock {
+                            error!("file read task queue is full");
+                        } else {
+                            error!("unexpected error occurred: {:?}", error);
+                        }
                         return ErrorResponse::Unexpected.into_response();
                     }
                 };
@@ -306,7 +310,11 @@ impl StaticFiles {
         let reader = match SingleRangeReader::new(file, 0, file_size) {
             Ok(x) => x,
             Err(error) => {
-                error!("unexpected error occurred: {:?}", error);
+                if error.kind() == ErrorKind::WouldBlock {
+                    error!("file read task queue is full");
+                } else {
+                    error!("unexpected error occurred: {:?}", error);
+                }
                 return ErrorResponse::Unexpected.into_response();
             }
         };

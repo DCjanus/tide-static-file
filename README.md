@@ -20,7 +20,7 @@ Static file server implementation, work with [Tide](https://github.com/rustasync
 
 # TODO
 
-+ Better performance (async file IO or 'sendfile')
++ Better performance (thread pool based async file IO)
 + Index file support(e.g., index.html)
 + File list for directory (default off)
 + Integration tests
